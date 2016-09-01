@@ -37,7 +37,7 @@ class Mimic(TTS):
         super(Mimic, self).__init__(lang, voice)
 
     def execute(self, sentence):
-        subprocess.call([BIN, '-voice', self.voice, '-t', sentence])
+        subprocess.call(['/usr/local/bin/python', '/home/pi/speekNSay.py', sentence])
 
 
 class MimicValidator(TTSValidator):
