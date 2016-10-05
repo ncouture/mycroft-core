@@ -15,15 +15,19 @@
 # You should have received a copy of the GNU General Public License
 # along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
 import sys
+import traceback
+import threading
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 from SocketServer import TCPServer
 from shutil import copyfile
 from subprocess import Popen, PIPE
 from threading import Thread
 from time import sleep
+import urlparse
 
 import os
-from os.path import join, dirname, realpath
+import time
+from os.path import dirname, realpath
 from pyric import pyw
 from wifi import Cell
 
@@ -37,6 +41,13 @@ from mycroft.util.log import getLogger
 __author__ = 'aatchison'
 
 LOG = getLogger("WiFiClient")
+
+
+def cli_no_output(*args):
+    LOG.info("Command: %s" % list(args))
+    proc = Popen(args=args, stdout=PIPE, stderr=PIPE)
+    stdout, stderr = proc.communicate()
+    return {'code': proc.returncode, 'stdout': stdout, 'stderr': stderr}
 
 
 def cli(*args):
@@ -60,18 +71,100 @@ def wpa(*args):
 def sysctrl(*args):
     return cli('systemctl', *args)
 
+REDIRECT_RESPONSE = """Location: http://start.mycroft.ai
+"""
+DUMMY_RESPONSE = """Content-type: text/html
+<html>
+<head>
+<title>Python Test</title>
+</head>
+<body>
+Test page...success.
+</body>
+</html>
+"""
+
+SCRIPT_DIR = dirname(realpath(__file__))
+
+
+class MycroftHTTPRequestHandler(SimpleHTTPRequestHandler):
+
+    def do_HEAD(self):
+        LOG.info("do_HEAD being called....")
+        if not self.redirect():
+            SimpleHTTPRequestHandler.do_HEAD(self)
+
+    def do_GET(self):
+        LOG.info("do_GET being called....")
+        if not self.redirect():
+            SimpleHTTPRequestHandler.do_GET(self)
+
+    def redirect(self):
+        try:
+            LOG.info("***********************")
+            LOG.info("**   HTTP Request   ***")
+            LOG.info("***********************")
+            LOG.info("Requesting: "+self.path)
+            LOG.info("REMOTE_ADDR:"+self.client_address[0])
+            LOG.info("SERVER_NAME:"+self.server.server_address[0])
+            LOG.info("SERVER_PORT:"+str(self.server.server_address[1]))
+            LOG.info("SERVER_PROTOCOL:"+self.request_version)
+            LOG.info("HEADERS...")
+            LOG.info(self.headers)
+            LOG.info("***********************")
+
+            # path = self.translate_path(self.path)
+            if "start.mycroft.ai" in self.headers['host']:
+                LOG.info("No redirect")
+                return False
+            else:
+                LOG.info("303 redirect to http://start.mycroft.ai")
+                self.send_response(303)
+                self.send_header("Location", "http://start.mycroft.ai")
+                self.end_headers()
+                return True
+
+            # res = urlparse.urlparse(self.path)
+            # if res.scheme == 'http':
+            #     reqFile = os.path.join(SCRIPT_DIR, 'web', res.path)
+            # else:
+            #     LOG.info("Unexpected scheme")
+            #     return
+            # LOG.info("Looking for: "+reqFile)
+            # if os.path.isfile(reqFile):
+            #     LOG.info("Found!  Serving...")
+            #     return SimpleHTTPRequestHandler.do_GET(self)
+            #
+            # if "start.mycroft.ai" not in self.headers:
+            #    LOG.info("Redirect to: /start.mycroft.ai")
+            #    self.send_response(301)
+            #    self.send_header("Location", "http://start.mycroft.ai")
+            #    # # self.send_header("Content-length", len(DUMMY_RESPONSE))
+            #    self.end_headers()
+            #    # # self.wfile.write(DUMMY_RESPONSE)
+            #    return
+            # self.path = '/index.html'
+            #
+            # return SimpleHTTPRequestHandler.do_GET(self)
+        except:
+            tb = traceback.format_exc()
+            LOG.info("exception caught")
+            LOG.info(tb)
+
 
 class WebServer(Thread):
-    DIR = dirname(realpath(__file__))
-
     def __init__(self, host, port):
         super(WebServer, self).__init__()
         self.daemon = True
-        self.server = TCPServer((host, port), SimpleHTTPRequestHandler)
+        LOG.info("Creating TCPServer...")
+        self.server = TCPServer((host, port), MycroftHTTPRequestHandler)
+        # self.server = TCPServer((host, port), SimpleHTTPRequestHandler)
+        LOG.info("Created TCPServer")
 
     def run(self):
         LOG.info("Starting Web Server at %s:%s" % self.server.server_address)
-        os.chdir(join(self.DIR, 'web'))
+        os.chdir(os.path.join(SCRIPT_DIR, 'web'))
+        LOG.info("Serving from: %s" % os.path.join(SCRIPT_DIR, 'web'))
         self.server.serve_forever()
         LOG.info("Web Server stopped!")
 
@@ -89,9 +182,10 @@ address=/#/{server}
     def __init__(self, wiface):
         self.wiface = wiface
         self.iface = 'p2p-wlan0-0'
-        self.ip = '172.24.1.1'
-        self.ip_start = '172.24.1.50'
-        self.ip_end = '172.24.1.150'
+        self.subnet = '172.24.1'
+        self.ip = self.subnet+'.1'
+        self.ip_start = self.subnet+'.50'
+        self.ip_end = self.subnet+'.150'
         self.password = None
 
     def up(self):
@@ -146,6 +240,8 @@ class WiFi:
         self.config = ConfigurationManager.get().get(self.NAME)
         self.init_events()
         self.first_setup()
+        self.threadConMon = None
+        self.threadConMon_stop = threading.Event()
 
     def init_events(self):
         self.client.on('mycroft.wifi.start', self.start)
@@ -158,15 +254,113 @@ class WiFi:
             self.start()
 
     def start(self, event=None):
+        # Fire up the MYCROFT access point for the user to connect to
+        # with a phone or computer.
         LOG.info("Starting access point...")
-        self.client.emit(Message("speak", metadata={
-            'utterance': "Initializing wireless setup mode."}))
+
+        # zap any existing leases file because:
+        # a) we don't care about previous leases
+        # b) we will monitor it for connections
+        # os.remove('/var/lib/misc/dnsmasq.leases')
+
+        # Fire up our access point
         self.ap.up()
         if not self.server:
+            LOG.info("Creating web server...")
             self.server = WebServer(self.ap.ip, 80)
+            LOG.info("Starting web server...")
             self.server.start()
-        self.enclosure.mouth_text(self.ap.password)
+            LOG.info("Created web server.")
+
+        self.connectionPrompt("Allow me to walk you through the wifi setup process,")
         LOG.info("Access point started!\n%s" % self.ap.__dict__)
+        self.startConnectionMonitor()
+
+    def connectionPrompt(self, prefix):
+        # let the user know to connect to it...
+        passwordSpelled = ", ".join(self.ap.password)
+        self.SpeakAndShow(
+           prefix+" Connect your phone or computer to the wifi network MYCROFT and enter the uppercase password "+passwordSpelled,
+           self.ap.password)
+
+    def startConnectionMonitor(self):
+        LOG.info("Starting monitor...\n")
+        if self.threadConMon is not None:
+            LOG.info("Killing old thread...\n")
+            self.threadConMon_stop.set()
+            self.threadConMon_stop.wait()
+
+        self.threadConMon = threading.Thread(target=self.doConnectionMonitor, args={})
+        self.threadConMon.daemon = True
+        self.threadConMon.start()
+        LOG.info("Monitor setup complete.\n")
+
+    def SpeakAndShow(self, speak, show):
+        self.client.emit(Message("speak", metadata={
+            'utterance': speak}))
+
+        # TODO: This should not be necessary, just sleeping to allow
+        #       the system to catch up.  Remove the sleep once this is cleaned
+        #       up.
+        sleep(0.25)
+        self.enclosure.mouth_text(show)
+
+    def doConnectionMonitor(self):
+        LOG.info("Starting monitor thread...\n")
+        mtimeLast = os.path.getmtime('/var/lib/misc/dnsmasq.leases')
+        bHasConnected = False
+        cARPFailures = 0
+
+        while not self.threadConMon_stop.isSet():
+            # do our monitoring...
+            mtime = os.path.getmtime('/var/lib/misc/dnsmasq.leases')
+            if mtimeLast != mtime:
+                # Something changed in the dnsmasq lease file -
+                # presumably a (re)new lease
+                self.SpeakAndShow(
+                    "Now you can open your browser and go to start dot mycroft dot A I, then follow the instructions given there",
+                    "start.mycroft.ai")
+                bHasConnected = True
+                cARPFailures = 0
+                mtimeLast = mtime
+                # Give the connection time to stabilize and get ARP entries
+                sleep(10)
+
+            if bHasConnected and False:
+                # Flush the ARP entries associated with our access point
+                # This will require all network hardware to re-register
+                # with the ARP tables if still present.
+                # call "ip -s -s neigh flush 172.24.1.0/24"
+                if cARPFailures == 0:
+                    res = cli_no_output('ip', '-s', '-s', 'neigh', 'flush', self.ap.subnet+'.0/24')
+                    # Give ARP system time to settle and re-register hardware
+                    sleep(5)
+
+                # now look at the hardware that has responded, if no entry
+                # shows up on our access point after 3*10=30 seconds, the user
+                # has disconnected
+                bConnected = False
+                res = cli_no_output('/usr/sbin/arp', '-n')
+                out = str(res.get("stdout"))
+                if out:
+                    # Parse output, skipping header
+                    for o in out.split("\n")[1:]:
+                        if o[0:len(self.ap.subnet)] == self.ap.subnet:
+                            if "(incomplete)" in o:
+                                print "LOST: "+o
+                            else:
+                                bConnected = True
+                if not bConnected:
+                    cARPFailures += 1
+                    if cARPFailures > 3:
+                        self.connectionPrompt("Connection lost,")
+                        bHasConnected = False
+                else:
+                    cARPFailures = 0
+            sleep(5)  # wait a bit before continuing
+
+        LOG.info("Exiting monitor thread...\n")
+        self.threadConMon_stop.clear()
 
     def scan(self, event=None):
         LOG.info("Scanning wifi connections...")
@@ -254,6 +448,7 @@ class WiFi:
 
     def stop(self, event=None):
         LOG.info("Stopping access point...")
+        self.threadConMon_stop.set()
         self.ap.down()
         if self.server:
             self.server.server.shutdown()
