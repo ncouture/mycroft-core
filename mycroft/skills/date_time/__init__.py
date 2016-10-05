@@ -17,13 +17,13 @@
 
 
 import datetime
-from os.path import dirname, join
 
 import tzlocal
+from adapt.intent import IntentBuilder
 from astral import Astral
+from os.path import dirname, join
 from pytz import timezone
 
-from adapt.intent import IntentBuilder
 from mycroft.skills.core import MycroftSkill
 
 __author__ = 'ryanleesipes'
@@ -32,8 +32,8 @@ __author__ = 'ryanleesipes'
 # TODO - Localization
 class TimeSkill(MycroftSkill):
     def __init__(self):
-        super(TimeSkill, self).__init__(name="TimeSkill")
-        self.format = self.config['time_format']
+        super(TimeSkill, self).__init__("TimeSkill")
+        self.format = self.config['format']
 
     def initialize(self):
         self.load_vocab_files(join(dirname(__file__), 'vocab', 'en-us'))
@@ -63,7 +63,7 @@ class TimeSkill(MycroftSkill):
     # This method only handles localtime, for other timezones the task falls
     # to Wolfram.
     def handle_intent(self, message):
-        location = message.metadata.get("Location", None)
+        location = message.data.get("Location", None)
 
         now = datetime.datetime.now(timezone('UTC'))
         if location is None:

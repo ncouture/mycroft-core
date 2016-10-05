@@ -22,8 +22,8 @@ from threading import Timer, Lock
 from time import mktime
 
 import parsedatetime as pdt
-
 from adapt.intent import IntentBuilder
+
 from mycroft.skills import time_rules
 from mycroft.skills.core import MycroftSkill
 from mycroft.util.log import getLogger
@@ -91,8 +91,9 @@ class ScheduledSkill(MycroftSkill):
             else:
                 return "%s minutes and %s seconds from now" % \
                        (int(minutes), int(seconds))
-        return date.strftime(
-            self.config_core.get('time.format'))
+        dt_format = self.config_core.get('date_format')
+        dt_format += " at " + self.config_core.get('time_format')
+        return date.strftime(dt_format)
 
     @abc.abstractmethod
     def get_times(self):
@@ -172,7 +173,7 @@ class ScheduledCRUDSkill(ScheduledSkill):
         return self.data.keys()
 
     def handle_create(self, message):
-        utterance = message.metadata.get('utterance')
+        utterance = message.data.get('utterance')
         date = self.get_utc_time(utterance)
         delay = date - self.get_utc_time()
 
@@ -192,7 +193,7 @@ class ScheduledCRUDSkill(ScheduledSkill):
             self.add(utc_time, message)
 
     def add(self, utc_time, message):
-        utterance = message.metadata.get('utterance')
+        utterance = message.data.get('utterance')
         self.data[utc_time] = None
         self.repeat_data[utc_time] = self.time_rules.get_week_days(utterance)
 
@@ -278,7 +279,7 @@ class ScheduledCRUDSkill(ScheduledSkill):
     # TODO - Localization
     def get_amount(self, message, default=None):
         size = len(self.data)
-        amount = message.metadata.get(self.name + 'Amount', default)
+        amount = message.data.get(self.name + 'Amount', default)
         if amount in ['all', 'my', 'all my', None]:
             total = size
         elif amount in ['one', 'the next', 'the following']:

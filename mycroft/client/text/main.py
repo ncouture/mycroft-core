@@ -21,10 +21,10 @@ from threading import Thread, Lock
 
 from mycroft.messagebus.client.ws import WebsocketClient
 from mycroft.messagebus.message import Message
-from mycroft.tts import tts_factory
+from mycroft.tts import TTSFactory
 from mycroft.util.log import getLogger
 
-tts = tts_factory.create()
+tts = TTSFactory.create()
 client = None
 mutex = Lock()
 logger = getLogger("CLIClient")
@@ -34,7 +34,7 @@ def handle_speak(event):
     mutex.acquire()
     client.emit(Message("recognizer_loop:audio_output_start"))
     try:
-        utterance = event.metadata.get('utterance')
+        utterance = event.data.get('utterance')
         logger.info("Speak: " + utterance)
         tts.execute(utterance)
     finally:
@@ -60,7 +60,7 @@ def main():
             line = sys.stdin.readline()
             client.emit(
                 Message("recognizer_loop:utterance",
-                        metadata={'utterances': [line.strip()]}))
+                        {'utterances': [line.strip()]}))
     except KeyboardInterrupt, e:
         logger.exception(e)
         event_thread.exit()

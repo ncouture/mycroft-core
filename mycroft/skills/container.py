@@ -52,7 +52,7 @@ class SkillContainer(object):
     @staticmethod
     def __build_params(args):
         parser = argparse.ArgumentParser()
-        parser.add_argument("--config", default="./mycroft.ini")
+        parser.add_argument("--config", default="./mycroft.conf")
         parser.add_argument("dir", nargs='?', default=dirname(__file__))
         parser.add_argument("--lib", default="./lib")
         parser.add_argument("--host", default=None)
@@ -63,7 +63,7 @@ class SkillContainer(object):
         return parser.parse_args(args)
 
     def __init_client(self, params):
-        config = ConfigurationManager.get().get("messagebus_client")
+        config = ConfigurationManager.get().get("websocket")
 
         if not params.host:
             params.host = config.get('host')

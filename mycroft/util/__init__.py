@@ -16,20 +16,16 @@
 # along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
 
 
-import os
-import os.path
-import subprocess
-from os.path import dirname
 import socket
-
-import psutil
+import subprocess
 import tempfile
 
+import os
+import os.path
+import psutil
+from os.path import dirname
+
 __author__ = 'jdorleans'
-
-
-def str2bool(v):
-    return v.lower() in ("yes", "true", "t", "1")
 
 
 def play_wav(file_path):
@@ -111,21 +107,22 @@ def connected(host="8.8.8.8", port=53, timeout=3):
             return False
 
 
-def create_signal(signalName):
+def create_signal(signal_name):
     try:
-        f = open(tempfile.gettempdir()+'/'+signalName, 'w')
-        return True
+        with open(tempfile.gettempdir() + '/' + signal_name, 'w'):
+            return True
     except IOError:
         return False
 
 
-def check_for_signal(signalName):
-    if os.path.isfile(tempfile.gettempdir()+'/'+signalName):
-        os.remove(tempfile.gettempdir()+'/'+signalName)
+def check_for_signal(signal_name):
+    filename = tempfile.gettempdir() + '/' + signal_name
+    if os.path.isfile(filename):
+        os.remove(filename)
         return True
-
     return False
 
 
-class CerberusAccessDenied(Exception):
-    pass
+def validate_param(value, name):
+    if not value:
+        raise ValueError("Missing or empty %s in mycroft.conf " % name)

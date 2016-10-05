@@ -14,24 +14,20 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
-import collections
+import json
 
-import requests
-from configobj import ConfigObj
 from genericpath import exists, isfile
 from os.path import join, dirname, expanduser
 
-from mycroft.identity import IdentityManager
-from mycroft.util import str2bool
 from mycroft.util.log import getLogger
 
 __author__ = 'seanfitz, jdorleans'
 
 logger = getLogger(__name__)
 
-DEFAULT_CONFIG = join(dirname(__file__), 'mycroft.ini')
-SYSTEM_CONFIG = '/etc/mycroft/mycroft.ini'
-USER_CONFIG = join(expanduser('~'), '.mycroft/mycroft.ini')
+DEFAULT_CONFIG = join(dirname(__file__), 'mycroft.conf')
+SYSTEM_CONFIG = '/etc/mycroft/mycroft.conf'
+USER_CONFIG = join(expanduser('~'), '.mycroft/mycroft.conf')
 
 
 class ConfigurationLoader(object):
@@ -80,23 +76,14 @@ class ConfigurationLoader(object):
     def __load(config, location):
         if exists(location) and isfile(location):
             try:
-                cobj = ConfigObj(location)
-                config = ConfigurationLoader.__merge(config, cobj)
-                logger.debug("Configuration '%s' loaded" % location)
+                with open(location) as f:
+                    config.update(json.load(f))
+                    logger.debug("Configuration '%s' loaded" % location)
             except Exception, e:
                 logger.error("Error loading configuration '%s'" % location)
                 logger.error(repr(e))
         else:
             logger.debug("Configuration '%s' not found" % location)
-        return config
-
-    @staticmethod
-    def __merge(config, cobj):
-        for k, v in cobj.iteritems():
-            if isinstance(v, collections.Mapping):
-                config[k] = ConfigurationLoader.__merge(config.get(k, {}), v)
-            else:
-                config[k] = cobj[k]
         return config
 
 
@@ -106,9 +93,7 @@ class RemoteConfiguration(object):
     config in the [core] config section
     """
     __remote_keys = {
-        "default_location": "location",
-        "default_language": "lang",
-        "timezone": "timezone"
+        "unit": "unit"
     }
 
     @staticmethod
@@ -120,19 +105,13 @@ class RemoteConfiguration(object):
     @staticmethod
     def load(config=None):
         RemoteConfiguration.validate_config(config)
+        update = config.get("server", {}).get("update")
 
-        identity = IdentityManager().get()
-        config_remote = config.get("remote_configuration", {})
-        enabled = str2bool(config_remote.get("enabled", "False"))
-
-        if enabled and identity.token:
-            url = config_remote.get("url")
-            auth_header = "Bearer %s:%s" % (identity.device_id, identity.token)
+        if update:
             try:
-                response = requests.get(url,
-                                        headers={"Authorization": auth_header})
-                user = response.json()
-                RemoteConfiguration.__load_attributes(config, user)
+                from mycroft.api import DeviceApi
+                setting = DeviceApi().find_setting()
+                RemoteConfiguration.__load_attributes(config, setting)
             except Exception as e:
                 logger.error(
                     "Failed to fetch remote configuration: %s" % repr(e))
@@ -142,18 +121,16 @@ class RemoteConfiguration(object):
         return config
 
     @staticmethod
-    def __load_attributes(config, user):
-        config_core = config["core"]
+    def __load_attributes(config, setting):
+        config_core = config
 
-        for att in user["attributes"]:
-            att_name = att.get("attribute_name")
-            name = RemoteConfiguration.__remote_keys.get(att_name)
+        for k, v in setting:
+            key = RemoteConfiguration.__remote_keys.get(k)
 
-            if name:
-                config_core[name] = str(att.get("attribute_value"))
-                logger.info(
-                    "Accepting remote configuration: core[%s] == %s" %
-                    (name, att["attribute_value"]))
+            if config_core.__contains__(key):
+                config_core[key] = str(v)
+                logger.info("Setting remote configuration: core[%s] == %s" %
+                            (key, v))
 
 
 class ConfigurationManager(object):
@@ -194,17 +171,23 @@ class ConfigurationManager(object):
         return ConfigurationManager.__config
 
     @staticmethod
-    def set(section, key, value, is_system=False):
+    def update(config):
         """
-        Set a key in the user preferences
+        Update cached configuration with the new ``config``.
         """
         if not ConfigurationManager.__config:
             ConfigurationManager.load_defaults()
 
-        ConfigurationManager.__config[section][key] = value
+        if config:
+            ConfigurationManager.__config.update(config)
 
+    @staticmethod
+    def save(config, is_system=False):
+        """
+        Save configuration ``config``.
+        """
+        ConfigurationManager.update(config)
         location = SYSTEM_CONFIG if is_system else USER_CONFIG
-        config = ConfigObj(location)
-        config.setdefault(section, {})
-        config[section][key] = value
-        config.write()
+        with open(location, 'rw') as f:
+            config = json.load(f).update(config)
+            json.dump(config, f)

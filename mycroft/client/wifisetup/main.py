@@ -35,7 +35,6 @@ from mycroft.client.enclosure.api import EnclosureAPI
 from mycroft.configuration import ConfigurationManager
 from mycroft.messagebus.client.ws import WebsocketClient
 from mycroft.messagebus.message import Message
-from mycroft.util import str2bool
 from mycroft.util.log import getLogger
 
 __author__ = 'aatchison'
@@ -229,15 +228,13 @@ address=/#/{server}
 
 
 class WiFi:
-    NAME = "WiFiClient"
-
     def __init__(self):
         self.iface = pyw.winterfaces()[0]
         self.ap = AccessPoint(self.iface)
         self.server = None
         self.client = WebsocketClient()
         self.enclosure = EnclosureAPI(self.client)
-        self.config = ConfigurationManager.get().get(self.NAME)
+        self.config = ConfigurationManager.get().get("wifi")
         self.init_events()
         self.first_setup()
         self.threadConMon = None
@@ -250,7 +247,7 @@ class WiFi:
         self.client.on('mycroft.wifi.connect', self.connect)
 
     def first_setup(self):
-        if str2bool(self.config.get('setup')):
+        if self.config.get('setup'):
             self.start()
 
     def start(self, event=None):
@@ -390,8 +387,8 @@ class WiFi:
         return float(values[0]) / float(values[1])
 
     def connect(self, event=None):
-        if event and event.metadata:
-            ssid = event.metadata.get("ssid")
+        if event and event.data:
+            ssid = event.data.get("ssid")
             connected = self.is_connected(ssid)
 
             if connected:
@@ -402,8 +399,8 @@ class WiFi:
                 nid = wpa(self.iface, 'add_network')
                 wpa(self.iface, 'set_network', nid, 'ssid', '"' + ssid + '"')
 
-                if event.metadata.__contains__("pass"):
-                    psk = '"' + event.metadata.get("pass") + '"'
+                if event.data.__contains__("pass"):
+                    psk = '"' + event.data.get("pass") + '"'
                     wpa(self.iface, 'set_network', nid, 'psk', psk)
                 else:
                     wpa(self.iface, 'set_network', nid, 'key_mgmt', 'NONE')
@@ -412,7 +409,8 @@ class WiFi:
                 connected = self.get_connected(ssid)
                 if connected:
                     wpa(self.iface, 'save_config')
-                    ConfigurationManager.set(self.NAME, 'setup', False, True)
+                    config = {"wifi": {"setup": False}}
+                    ConfigurationManager.save(config, True)
 
             self.client.emit(Message("mycroft.wifi.connected",
                                      {'connected': connected}))
